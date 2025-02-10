@@ -16,6 +16,14 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("Taller1ME02");
 
+std::string m_CSVfileName{"/home/nicolas/ns-allinone-3.43/ns-3.43/scratch/manet-routing.output.csv"}; //!< CSV filename.
+uint128_t bytesTotal = 0;      //!< Total received bytes.
+uint32_t packetsReceived = 0 ;
+int m_nSinks{10};   
+std::string m_protocolName{"AODV"};    
+double m_txp{7.5};  
+bool m_traceMobility{true};                           //!< Enable mobility tracing.
+bool m_flowMonitor{false};   
 // Funciones de callback para los traces de IPv4
 static void Ipv4TxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
 {
@@ -75,16 +83,37 @@ static void CheckThroughput()
 
     out.close();
     packetsReceived = 0;
-    Simulator::Schedule(Seconds(1.0), &RoutingExperiment::CheckThroughput, this);
+    Simulator::Schedule(Seconds(1.0), &CheckThroughput);
+}
+
+Ptr<Socket> SetupPacketReceive(Ipv4Address addr, Ptr<Node> node)
+{
+    TypeId tid = TypeId::LookupByName("ns3::UdpSocketFactory");
+    Ptr<Socket> sink = Socket::CreateSocket(node, tid);
+    InetSocketAddress local = InetSocketAddress(addr, port);
+    sink->Bind(local);
+    sink->SetRecvCallback(MakeCallback(ReceivePacket));
+
+    return sink;
 }
 
 
 int main(int argc, char *argv[]) {
 
+    Packet::EnablePrinting();
+    // blank out the last output file and write the column headers
+    std::ofstream out(m_CSVfileName);
+    out << "SimulationSecond,"
+        << "ReceiveRate,"
+        << "PacketsReceived,"
+        << "NumberOfSinks,"
+        << "RoutingProtocol,"
+        << "TransmissionPower" << std::endl;
+    out.close();
+
     bool packetReceive = true;
     bool verbose = false;
     bool printRoutes = true;
-    std::string m_protocolName{"AODV"};    
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("packetReceive", "Ver paquetes", packetReceive);
@@ -241,6 +270,24 @@ int main(int argc, char *argv[]) {
     address.SetBase("10.1.3.0", "255.255.255.252");
     Ipv4InterfaceContainer p2pInterfaces = address.Assign(p2pDevices);
 
+
+    OnOffHelper onoff1("ns3::UdpSocketFactory", Address());
+    onoff1.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
+    onoff1.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
+
+    for (int i = 0; i < m_nSinks; i++)
+    {
+        Ptr<Socket> sink = SetupPacketReceive(staInterfaces1.GetAddress(i), adhocNodes.Get(i));
+
+        AddressValue remoteAddress(InetSocketAddress(adhocInterfaces.GetAddress(i), port));
+        onoff1.SetAttribute("Remote", remoteAddress);
+
+        Ptr<UniformRandomVariable> var = CreateObject<UniformRandomVariable>();
+        ApplicationContainer temp = onoff1.Install(adhocNodes.Get(i + m_nSinks));
+        temp.Start(Seconds(var->GetValue(100.0, 101.0)));
+        temp.Stop(Seconds(TotalTime));
+    }
+
     // Applications (UDP Echo for testing)
     UdpEchoServerHelper echoServer(9);
     ApplicationContainer serverApps = echoServer.Install(wifiStaNodes2.Get(0));
@@ -282,8 +329,9 @@ int main(int argc, char *argv[]) {
          Ipv4RoutingHelper::PrintRoutingTableAllAt(Seconds(8), routingStream);
      }
 
+    CheckThroughput();
     // Run simulation
-    Simulator::Stop(Seconds(10.0));
+    Simulator::Stop(Seconds(100.0));
     Simulator::Run();
     Simulator::Destroy();
 
