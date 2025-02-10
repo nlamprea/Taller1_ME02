@@ -11,27 +11,38 @@
 #include "ns3/flow-monitor-module.h"
 #include "ns3/olsr-module.h"
 #include "ns3/yans-wifi-helper.h"
+#include <fstream>
+
+// Default Network Topology
+//
+//   Wifi 10.1.3.0
+//                 AP
+//  *    *    *    *
+//  |    |    |    |    10.1.1.1
+// n5   n6   n7   n0 -------------- n1   n2   n3   n4
+//                   point-to-point  |    |    |    |
+//                                   ================
+//                                     wifi 10.1.2.0
+
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("Taller1ME02");
 
-std::string m_CSVfileName{"/home/nicolas/ns-allinone-3.43/ns-3.43/scratch/manet-routing.output.csv"}; //!< CSV filename.
-uint128_t bytesTotal = 0;      //!< Total received bytes.
-uint32_t packetsReceived = 0 ;
-int m_nSinks{10};   
-std::string m_protocolName{"AODV"};    
-double m_txp{7.5};  
-bool m_traceMobility{true};                           //!< Enable mobility tracing.
-bool m_flowMonitor{false};   
-// Funciones de callback para los traces de IPv4
-static void Ipv4TxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
-{
-    Ipv4Header ipHeader;
-    packet->PeekHeader(ipHeader);
-    NS_LOG_INFO("Enviando paquete desde " << ipHeader.GetSource() << " hacia " << ipHeader.GetDestination());
-}
+static std::ofstream csvFile;
 
+
+static void Ipv4TxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface) {
+    Ipv4Header ipHeader;
+    if (packet->PeekHeader(ipHeader)) {
+        csvFile << ipHeader.GetSource() << ","
+                << ipHeader.GetDestination() << ","
+                << packet->GetSize() << ","
+                << ipHeader.GetProtocol() << ","
+                << "1" << std::endl;
+        NS_LOG_INFO("Enviando paquete desde " << ipHeader.GetSource() << " hacia " << ipHeader.GetDestination());
+    }
+}
 static void Ipv4RxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
 {
     Ipv4Header ipHeader;
@@ -41,75 +52,14 @@ static void Ipv4RxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t inter
 }
 
 
-static std::string PrintReceivedPacket(Ptr<Socket> socket, Ptr<Packet> packet, Address senderAddress)
-{
-    std::ostringstream oss;
-
-    oss << Simulator::Now().GetSeconds() << " " << socket->GetNode()->GetId();
-
-    if (InetSocketAddress::IsMatchingType(senderAddress))
-    {
-        InetSocketAddress addr = InetSocketAddress::ConvertFrom(senderAddress);
-        oss << " received one packet from " << addr.GetIpv4();
-    }
-    else
-    {
-        oss << " received one packet!";
-    }
-    return oss.str();
-}
-
-static void ReceivePacket(Ptr<Socket> socket)
-{
-    Ptr<Packet> packet;
-    Address senderAddress;
-    while ((packet = socket->RecvFrom(senderAddress)))
-    {
-        bytesTotal += packet->GetSize();
-        packetsReceived += 1;
-        NS_LOG_UNCOND(PrintReceivedPacket(socket, packet, senderAddress));
-    }
-}
-
-static void CheckThroughput()
-{
-    double kbs = (bytesTotal * 8.0) / 1000;
-    bytesTotal = 0;
-
-    std::ofstream out(m_CSVfileName, std::ios::app);
-
-    out << (Simulator::Now()).GetSeconds() << "," << kbs << "," << packetsReceived << ","
-        << m_nSinks << "," << m_protocolName << "," << m_txp << "" << std::endl;
-
-    out.close();
-    packetsReceived = 0;
-    Simulator::Schedule(Seconds(1.0), &CheckThroughput);
-}
-
-Ptr<Socket> SetupPacketReceive(Ipv4Address addr, Ptr<Node> node)
-{
-    TypeId tid = TypeId::LookupByName("ns3::UdpSocketFactory");
-    Ptr<Socket> sink = Socket::CreateSocket(node, tid);
-    InetSocketAddress local = InetSocketAddress(addr, port);
-    sink->Bind(local);
-    sink->SetRecvCallback(MakeCallback(ReceivePacket));
-
-    return sink;
-}
-
 
 int main(int argc, char *argv[]) {
 
     Packet::EnablePrinting();
+    std::string m_protocolName{"AODV"}; 
     // blank out the last output file and write the column headers
-    std::ofstream out(m_CSVfileName);
-    out << "SimulationSecond,"
-        << "ReceiveRate,"
-        << "PacketsReceived,"
-        << "NumberOfSinks,"
-        << "RoutingProtocol,"
-        << "TransmissionPower" << std::endl;
-    out.close();
+    csvFile.open("/home/nicolas/ns-allinone-3.43/ns-3.43/scratch/packet_info.csv");
+    csvFile << "SourceIP,DestinationIP,PacketSize,Protocol,NumPackets\n";
 
     bool packetReceive = true;
     bool verbose = false;
@@ -151,18 +101,25 @@ int main(int argc, char *argv[]) {
     NetDeviceContainer p2pDevices;
     p2pDevices = p2p.Install(wifiApNodes.Get(0), wifiApNodes.Get(1));
 
-    // Configure WiFi networks
+    NodeContainer allNodes;
+    allNodes.Add(wifiStaNodes1);
+    allNodes.Add(wifiStaNodes2);
+    allNodes.Add(wifiApNodes);
+
+    // ====================== CONFIGURACIÓN WiFi ======================
+
     WifiHelper wifi;
     wifi.SetStandard(WIFI_STANDARD_80211b);
     wifi.SetRemoteStationManager("ns3::AarfWifiManager");
 
+    // Configuración del canal inalámbrico
     YansWifiChannelHelper channel;
     channel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
     channel.AddPropagationLoss("ns3::FriisPropagationLossModel");
     YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
-    // First WiFi network
+    // Red WiFi 1 (AP + estaciones)
     Ssid ssid1 = Ssid("Network1");
     WifiMacHelper mac;
 
@@ -174,7 +131,7 @@ int main(int argc, char *argv[]) {
     mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid1));
     NetDeviceContainer apDevices1 = wifi.Install(phy, mac, wifiApNodes.Get(0));
 
-    // Second WiFi network
+    // Red WiFi 2 (AP + estaciones)
     Ssid ssid2 = Ssid("Network2");
     mac.SetType("ns3::StaWifiMac",
                 "Ssid", SsidValue(ssid2),
@@ -210,13 +167,13 @@ int main(int argc, char *argv[]) {
         staPos->SetPosition(Vector(105.0, 0.0, 0.0));
     }
 
-    // Install Internet stack with AODV routing
+    // ====================== PILA DE PROTOCOLOS ======================
 
     AodvHelper aodv;
     OlsrHelper olsr;
     DsdvHelper dsdv;
     DsrHelper dsr;
-    Ipv4ListRoutingHelper list;
+    Ipv4ListRoutingHelper list; // Helper para selección de protocolo de enrutamiento
     InternetStackHelper stack;
     if (m_protocolName == "OLSR")
     {
@@ -246,54 +203,41 @@ int main(int argc, char *argv[]) {
     {
         NS_FATAL_ERROR("No such protocol:" << m_protocolName);
     }
-    // AodvHelper aodv;
-    // InternetStackHelper stack;
-    // stack.SetRoutingHelper(aodv);
-    // stack.Install(wifiStaNodes1);
-    // stack.Install(wifiStaNodes2);
-    // stack.Install(wifiApNodes);
 
-    // Assign IP addresses
+    // ====================== ASIGNACIÓN DE DIRECCIONES IP ======================
     Ipv4AddressHelper address;
 
-    // First WiFi network
+    // Red WiFi 1
     address.SetBase("10.1.1.0", "255.255.255.0");
     Ipv4InterfaceContainer staInterfaces1 = address.Assign(staDevices1);
     address.Assign(apDevices1);
 
-    // Second WiFi network
+    // Red WiFi 2
     address.SetBase("10.1.2.0", "255.255.255.0");
     Ipv4InterfaceContainer staInterfaces2 = address.Assign(staDevices2);
     address.Assign(apDevices2);
 
-    // P2P network
+    // Enlace P2P
     address.SetBase("10.1.3.0", "255.255.255.252");
     Ipv4InterfaceContainer p2pInterfaces = address.Assign(p2pDevices);
 
 
-    OnOffHelper onoff1("ns3::UdpSocketFactory", Address());
-    onoff1.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1.0]"));
-    onoff1.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0.0]"));
-
-    for (int i = 0; i < m_nSinks; i++)
-    {
-        Ptr<Socket> sink = SetupPacketReceive(staInterfaces1.GetAddress(i), adhocNodes.Get(i));
-
-        AddressValue remoteAddress(InetSocketAddress(adhocInterfaces.GetAddress(i), port));
-        onoff1.SetAttribute("Remote", remoteAddress);
-
-        Ptr<UniformRandomVariable> var = CreateObject<UniformRandomVariable>();
-        ApplicationContainer temp = onoff1.Install(adhocNodes.Get(i + m_nSinks));
-        temp.Start(Seconds(var->GetValue(100.0, 101.0)));
-        temp.Stop(Seconds(TotalTime));
+    for (uint32_t i = 0; i < allNodes.GetN(); ++i) {
+        Ptr<Node> node = allNodes.Get(i);
+        Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
+        if (ipv4) {
+            ipv4->TraceConnectWithoutContext("Tx", MakeCallback(&Ipv4TxTrace));
+        }
     }
 
-    // Applications (UDP Echo for testing)
+    // ====================== APLICACIONES ======================
+    // Servidor UDP en red 2
     UdpEchoServerHelper echoServer(9);
     ApplicationContainer serverApps = echoServer.Install(wifiStaNodes2.Get(0));
     serverApps.Start(Seconds(1.0));
     serverApps.Stop(Seconds(10.0));
 
+    // Cliente UDP en red 1
     UdpEchoClientHelper echoClient(staInterfaces2.GetAddress(0), 9);
     echoClient.SetAttribute("MaxPackets", UintegerValue(2));
     echoClient.SetAttribute("Interval", TimeValue(Seconds(1.0)));
@@ -303,7 +247,7 @@ int main(int argc, char *argv[]) {
     clientApps.Start(Seconds(2.0));
     clientApps.Stop(Seconds(10.0));
 
-    // Enable PCAP tracing
+    // Habilitar capturas PCAP
     phy.EnablePcapAll("two_wifi_aodv");
 
 
@@ -321,7 +265,7 @@ int main(int argc, char *argv[]) {
     serverIpv4->TraceConnectWithoutContext("Tx", MakeCallback(&Ipv4TxTrace));
     serverIpv4->TraceConnectWithoutContext("Rx", MakeCallback(&Ipv4RxTrace));
 
-
+    // Generar tablas de enrutamiento
     if (printRoutes)
      {
          Ptr<OutputStreamWrapper> routingStream =
@@ -329,10 +273,10 @@ int main(int argc, char *argv[]) {
          Ipv4RoutingHelper::PrintRoutingTableAllAt(Seconds(8), routingStream);
      }
 
-    CheckThroughput();
-    // Run simulation
-    Simulator::Stop(Seconds(100.0));
+    // ====================== EJECUCIÓN DE LA SIMULACIÓN ======================
+    Simulator::Stop(Seconds(10.0));
     Simulator::Run();
+    csvFile.close();
     Simulator::Destroy();
 
     return 0;
