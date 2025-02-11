@@ -1,15 +1,17 @@
+// Incluir módulos necesarios de ns-3
 #include "ns3/core-module.h"
-#include "ns3/internet-module.h"
 #include "ns3/network-module.h"
+#include "ns3/internet-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/wifi-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/point-to-point-module.h"
+// Protocolos de enrutamiento
 #include "ns3/aodv-module.h"
 #include "ns3/dsdv-module.h"
 #include "ns3/dsr-module.h"
-#include "ns3/flow-monitor-module.h"
 #include "ns3/olsr-module.h"
+#include "ns3/flow-monitor-module.h"
 #include "ns3/yans-wifi-helper.h"
 #include <fstream>
 
@@ -31,7 +33,7 @@ NS_LOG_COMPONENT_DEFINE("Taller1ME02");
 
 static std::ofstream csvFile;
 
-
+// Función de trace para paquetes transmitidos
 static void Ipv4TxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface) {
     Ipv4Header ipHeader;
     if (packet->PeekHeader(ipHeader)) {
@@ -43,6 +45,8 @@ static void Ipv4TxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t inter
         NS_LOG_INFO("Enviando paquete desde " << ipHeader.GetSource() << " hacia " << ipHeader.GetDestination());
     }
 }
+
+// Función de trace para paquetes recibidos
 static void Ipv4RxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t interface)
 {
     Ipv4Header ipHeader;
@@ -52,27 +56,29 @@ static void Ipv4RxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t inter
 }
 
 
-
 int main(int argc, char *argv[]) {
 
     Packet::EnablePrinting();
-    std::string m_protocolName{"AODV"}; 
-    // blank out the last output file and write the column headers
-    csvFile.open("/home/nicolas/ns-allinone-3.43/ns-3.43/scratch/packet_info.csv");
-    csvFile << "SourceIP,DestinationIP,PacketSize,Protocol,NumPackets\n";
+    std::string m_protocolName{"AODV"}; // Protocolo de enrutamiento por defecto
 
+    // Inicializar archivo CSV
+    csvFile.open("/home/nicolas/ns-allinone-3.43/ns-3.43/scratch/packet_info.csv");
+    csvFile << "SourceIP/Fuente,DestinationIP/Destino,PacketSize/TamañoPaquete,Protocol/Protocolo,NumPackets/NumPaquetes\n";
+
+    // Parámetros configurables
     bool packetReceive = true;
     bool verbose = false;
     bool printRoutes = true;
 
+    // Manejo de parámetros de línea de comandos
     CommandLine cmd(__FILE__);
     cmd.AddValue("packetReceive", "Ver paquetes", packetReceive);
     cmd.AddValue("protocol", "Routing protocol (OLSR, AODV, DSDV)", m_protocolName);
     cmd.AddValue("verbose", "Tell echo applications to log if true", verbose);
 
-
     cmd.Parse(argc, argv);
-    // Enable logging
+
+    // Configurar logging
     if (verbose)
     {
         LogComponentEnable("UdpEchoClientApplication", LOG_LEVEL_INFO);
@@ -85,13 +91,14 @@ int main(int argc, char *argv[]) {
         LogComponentEnable("Taller1ME02", LOG_LEVEL_INFO); // Habilita los logs del script
     }
 
-    // Create nodes for WiFi stations and APs
+    // ====================== CONFIGURACIÓN DE RED ======================
+    // Creación de nodos
     NodeContainer wifiStaNodes1, wifiStaNodes2;
-    wifiStaNodes1.Create(2); // Two stations in first WiFi
-    wifiStaNodes2.Create(2); // Two stations in second WiFi
+    wifiStaNodes1.Create(2); // Red 1: 2 estaciones
+    wifiStaNodes2.Create(2); // Red 2: 2 estaciones
 
     NodeContainer wifiApNodes;
-    wifiApNodes.Create(2); // Two AP nodes
+    wifiApNodes.Create(2); // 2 APs
 
     // Set up P2P link between APs
     PointToPointHelper p2p;
