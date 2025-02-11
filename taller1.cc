@@ -55,6 +55,42 @@ static void Ipv4RxTrace(Ptr<const Packet> packet, Ptr<Ipv4> ipv4, uint32_t inter
     NS_LOG_INFO("Recibiendo paquete en " << localAddress.GetLocal() << " desde " << ipHeader.GetSource() << " hacia " << ipHeader.GetDestination());
 }
 
+void CalculateMetrics(Ptr<FlowMonitor> flowMonitor, FlowMonitorHelper &flowHelper)
+{
+    flowMonitor->CheckForLostPackets();
+    Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
+    std::map<FlowId, FlowMonitor::FlowStats> stats = flowMonitor->GetFlowStats();
+    
+    double totalLatency = 0.0;
+    uint32_t receivedPackets = 0;
+    uint32_t lostPackets = 0;
+    double totalThroughput = 0.0;
+
+    for (auto &flow : stats)
+    {
+        Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flow.first);
+        
+        lostPackets += flow.second.lostPackets;
+        receivedPackets += flow.second.rxPackets;
+        if (flow.second.rxPackets > 0)
+        {
+            totalLatency += (flow.second.delaySum.GetSeconds() / flow.second.rxPackets);
+        }
+        
+        if (flow.second.timeLastRxPacket.GetSeconds() - flow.second.timeFirstTxPacket.GetSeconds() > 0)
+        {
+            totalThroughput += (flow.second.rxBytes * 8.0) / (flow.second.timeLastRxPacket.GetSeconds() - flow.second.timeFirstTxPacket.GetSeconds()) / 1024; // Kbps
+        }
+    }
+    
+    double avgLatency = receivedPackets > 0 ? totalLatency / receivedPackets : 0;
+    double packetLossRate = (receivedPackets + lostPackets) > 0 ? ((double)lostPackets / (receivedPackets + lostPackets)) * 100 : 0;
+    double avgThroughput = totalThroughput;
+
+    std::cout << "Latencia promedio: " << avgLatency << " s" << std::endl;
+    std::cout << "Pérdida de paquetes: " << packetLossRate << " %" << std::endl;
+    std::cout << "Ancho de banda promedio: " << avgThroughput << " Kbps" << std::endl;
+}
 
 int main(int argc, char *argv[]) {
 
@@ -254,6 +290,9 @@ int main(int argc, char *argv[]) {
     clientApps.Start(Seconds(2.0));
     clientApps.Stop(Seconds(10.0));
 
+    FlowMonitorHelper flowHelper;
+    Ptr<FlowMonitor> flowMonitor = flowHelper.InstallAll();
+
     // Habilitar capturas PCAP
     phy.EnablePcapAll("two_wifi_aodv");
 
@@ -281,9 +320,10 @@ int main(int argc, char *argv[]) {
      }
 
     // ====================== EJECUCIÓN DE LA SIMULACIÓN ======================
-    Simulator::Stop(Seconds(10.0));
+    Simulator::Stop(Seconds(100.0));
     Simulator::Run();
     csvFile.close();
+    CalculateMetrics(flowMonitor, flowHelper);
     Simulator::Destroy();
 
     return 0;
